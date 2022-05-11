@@ -9,6 +9,7 @@ local validate_scope = require("kong.plugins.jwt-keycloak.validators.scope").val
 local validate_roles = require("kong.plugins.jwt-keycloak.validators.roles").validate_roles
 local validate_realm_roles = require("kong.plugins.jwt-keycloak.validators.roles").validate_realm_roles
 local validate_client_roles = require("kong.plugins.jwt-keycloak.validators.roles").validate_client_roles
+local filter = require("kong.plugins.jwt-keycloak.filter")
 
 local re_gmatch = ngx.re.gmatch
 
@@ -336,23 +337,27 @@ function JwtKeycloakHandler:access(conf)
         return
     end
 
-    local ok, err = do_authentication(conf)
-    if not ok then
-        if conf.anonymous then
-            -- get anonymous user
-            local consumer_cache_key = kong.db.consumers:cache_key(conf.anonymous)
-            local consumer, err      = kong.cache:get(consumer_cache_key, nil,
-                                                    load_consumer,
-                                                    conf.anonymous, true)
-            if err then
-                kong.log.err(err)
-                return kong.response.exit(500, { message = "An unexpected error occurred" })
+    if filter.shouldProcessRequest(conf) then        
+        local ok, err = do_authentication(conf)
+        if not ok then
+            if conf.anonymous then
+                -- get anonymous user
+                local consumer_cache_key = kong.db.consumers:cache_key(conf.anonymous)
+                local consumer, err      = kong.cache:get(consumer_cache_key, nil,
+                                                        load_consumer,
+                                                        conf.anonymous, true)
+                if err then
+                    kong.log.err(err)
+                    return kong.response.exit(500, { message = "An unexpected error occurred" })
+                end
+    
+                set_consumer(consumer, nil, nil)
+            else
+                return kong.response.exit(err.status, err.errors or { message = err.message })
             end
-
-            set_consumer(consumer, nil, nil)
-        else
-            return kong.response.exit(err.status, err.errors or { message = err.message })
         end
+    else
+        ngx.log(ngx.DEBUG, "OidcHandler ignoring request, path: " .. ngx.var.request_uri)
     end
 end
 
